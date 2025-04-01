@@ -1,16 +1,16 @@
 const mangayomiSources = [{
     "name": "Webtoons",
-    "lang": "en",
+    "langs": ["en", "fr", "id", "th", "es", "zh", "de"],
     "baseUrl": "https://www.webtoons.com",
     "apiUrl": "",
     "iconUrl": "https://upload.wikimedia.org/wikipedia/commons/0/09/Naver_Line_Webtoon_logo.png",
     "typeSource": "single",
     "isManga": true,
     "isNsfw": false,
-    "version": "0.0.1",
+    "version": "0.0.3",
     "dateFormat": "",
     "dateFormatLocale": "",
-    "pkgPath": "https://github.com/uwu-wuw/mangayomi-extension/edit/main/webtoons.js"
+    "pkgPath": "manga/src/all/webtoons.js"
 }];
 
 class DefaultExtension extends MProvider {
@@ -23,11 +23,11 @@ class DefaultExtension extends MProvider {
         }
     }
 
-    async getItem(url, p) {
+    async getItem(url, selector) {
         const res = await new Client().get(this.source.baseUrl + url, this.headers);
         const doc = new Document(res.body);
         const mangas = [];
-        const elements = doc.select(p);
+        const elements = doc.select(selector);
         for (const element of elements) {
             const linkElement = element.selectFirst("a");
             const imageElement = linkElement.selectFirst("img");
@@ -53,7 +53,7 @@ class DefaultExtension extends MProvider {
     async getPopular(page) {
         const baseUrl = this.source.baseUrl;
         const client = new Client();
-        const res = await client.get(`${baseUrl}/en/originals`);
+        const res = await client.get(`${baseUrl}/${this.langCode()}/originals`);
         const doc = new Document(res.body);
 
         const days = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"];
@@ -99,8 +99,7 @@ class DefaultExtension extends MProvider {
 
     async getLatestUpdates(page) {
         const Day = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
-
-        const list = await this.getItem(`/en/originals?sortOrder=UPDATE`, "div.daily_section._list_" + Day[new Date().getDay()] + " li");
+        const list = await this.getItem(`/${this.langCode()}/originals?sortOrder=UPDATE`, "div.daily_section._list_" + Day[new Date().getDay()] + " li");
         return {
             list: list,
             hasNextPage: false
@@ -114,17 +113,34 @@ class DefaultExtension extends MProvider {
         let type_canvas = "CHALLENGE";
         let fetch_originals = "ul.card_lst li";
         let fetch_canvas = "div.challenge_lst.search li";
+        let fetch_genre = "ul.card_lst li";
         let list_originals = [];
         let list_canvas = [];
         let list = [];
 
         if (query !== "") {
-            list_originals = await this.getItem(`/en/search?keyword=${keyword}&searchType=` + type_originals + `&page=${page}`, fetch_originals);
-            list_canvas = await this.getItem(`/en/search?keyword=${keyword}&searchType=` + type_canvas + `&page=${page}`, fetch_canvas);
-            if (filters) { }
-            list = list_originals.concat(list_canvas);
+            list_originals = await this.getItem(`/${this.langCode()}/search?keyword=${keyword}&searchType=` + type_originals + `&page=${page}`, fetch_originals);
+            list_canvas = await this.getItem(`/${this.langCode()}/search?keyword=${keyword}&searchType=` + type_canvas + `&page=${page}`, fetch_canvas);
+            if (filters) {
+                for (var filter of filters) {
+                    if (filter.type === "sort") {
+                        if (filter.state === 1) list = list_originals;
+                        else if (filter.state === 2) list = list_canvas;
+                        else list = list_originals.concat(list_canvas);
+                    }
+                }
+            }
         } else {
-
+            for (var filter of filters) {
+                if (filter.type === "categories") {
+                    if (filter.state === 0) {
+                        list = [];
+                    } else {
+                        list = await this.getItem(`/${this.langCode()}/genres/${filter.values[filter.state].value}?sortOrder=READ_COUNT`, fetch_genre);
+                    }
+                    hasNextPage = false;
+                }
+            }
         }
 
         if (list.length === 0) { hasNextPage = false; }
@@ -135,22 +151,10 @@ class DefaultExtension extends MProvider {
     }
 
     async getDetail(url) {
-        function formatDateString(dateStr) {
-            const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-            const parts = dateStr.split(' ');
-
-            if (parts.length === 3) {
-                const month = months.indexOf(parts[0]) + 1;
-                const day = parts[1].replace(',', '');
-                const year = parts[2];
-                return `${year}-${month.toString().padStart(2, '0')}-${day.padStart(2, '0')}`;
-            }
-            return dateStr;
-        }
         const res = await new Client().get(url);
         const doc = new Document(res.body);
         const info = doc.selectFirst("div.cont_box");
-        const cover = info.selectFirst("span.thmb img").attr('src') ?? (info.selectFirst("div.detail_body.banner").attr('style').match(/url\(["']?([^"')]+)["']?\)/))[1];
+        const cover = info.selectFirst("div.detail_body")?.attr("style")?.match(/url\(['"]?(.*?)['"]?\)/)?.[1] ?? info.selectFirst("span.thmb img")?.attr("src");
         const title = info.selectFirst("h1.subj, h3.subj").text.trim();
         const genre = Array.from(info.select("p.genre")).map(el => el.text) != '' ? Array.from(info.select("p.genre")).map(el => el.text) : [info.selectFirst("div.info h2").text];
         const author = info.selectFirst("div.author_area").text.replace(/\s+/g, ' ').replace(/author info/g, '').trim() ?? info.selectFirst("a.author").text;
@@ -175,7 +179,7 @@ class DefaultExtension extends MProvider {
             for (const element of elements) {
                 tester = element.selectFirst("span.tx").text.trim();
                 const dateString = element.selectFirst("span.date").text.trim();
-                const date = new Date(formatDateString(dateString));
+                const date = new Date(this.formatDateString(dateString, this.source.lang));
                 const millisecondsSinceEpoch = date.getTime();
                 const millisecondsString = millisecondsSinceEpoch.toString();
                 chapters.push({
@@ -190,16 +194,88 @@ class DefaultExtension extends MProvider {
             name: title,
             link: url,
             genre: genre,
-            imageUrl: cover,
             description: desc,
+            imageUrl: cover,
             author: author,
             status: status,
             episodes: chapters
         };
     }
 
+
+
+    langCode() {
+        return {
+            en: "en",
+            fr: "fr",
+            id: "id",
+            th: "th",
+            es: "es",
+            zh: "zh-hant",
+            de: "de"
+        }[this.source.lang];
+    }
+
+    formatDateString(dateStr, lang) {
+        // Month translations for supported languages
+        const monthTranslations = {
+            en: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+            fr: ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."],
+            id: ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agt", "Sep", "Okt", "Nov", "Des"],
+            th: ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."],
+            es: ["ene.", "feb.", "mar.", "abr.", "may.", "jun.", "jul.", "ago.", "sep.", "oct.", "nov.", "dic."],
+            zh: [], // No need for month names; uses yyyy年MM月dd日 format
+            de: []  // No need for month names; uses dd.MM.yyyy format
+        };
+        const months = monthTranslations[lang];
+        let parts;
+        let month;
+        let day;
+        let year;
+        // Handle formats based on the language
+        switch (lang) {
+            case "zh":
+                // Expected format: yyyy年MM月dd日
+                const match = dateStr.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+                year = match[1];
+                month = match[2];
+                day = match[3];
+            case "de":
+                // Expected format: dd.MM.yyyy
+                parts = dateStr.split('.');
+                if (parts.length === 3) {
+                    month = parts[1];
+                    day = parts[0];
+                    year = parts[2];
+                }
+            case "es":
+            case "fr":
+            case "id":
+            case "th":
+                // Expected format: dd MMM yyyy
+                parts = dateStr.split(' ');
+                if (parts.length === 3) {
+                    month = months.indexOf(parts[1]) + 1;
+                    day = parts[0];
+                    year = parts[2];
+                }
+                break;
+            default:
+                parts = dateStr.split(' ');
+                if (parts.length === 3) {
+                    month = months.indexOf(parts[0]) + 1;
+                    day = parts[1].replace(',', '');
+                    year = parts[2];
+                }
+        }
+        if (!month || !year || !day) {
+            return Date.now();
+        }
+        return `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+
+    }
+
     async getPageList(url) {
-        const preference = new SharedPreferences();
         const res = await new Client().get(url);
         const doc = new Document(res.body);
         const urls = [];
@@ -215,114 +291,121 @@ class DefaultExtension extends MProvider {
 
     getFilterList() {
         return [{
-            type: "sort",
-            name: "Official or Challenge",
-            type_name: "SelectFilter",
-            values: [{
-                type_name: "SelectOption",
-                name: "Any",
-                value: "any"
+                type_name: "HeaderFilter",
+                name: "NOTE: Only use with text search."
             },
             {
-                type_name: "SelectOption",
-                name: "Official only",
-                value: "official"
+                type: "sort",
+                name: "Official or Challenge",
+                type_name: "SelectFilter",
+                values: [{
+                    type_name: "SelectOption",
+                    name: "Any",
+                    value: "any"
+                },
+                {
+                    type_name: "SelectOption",
+                    name: "Official only",
+                    value: "official"
+                },
+                {
+                    type_name: "SelectOption",
+                    name: "Challenge only",
+                    value: "challenge"
+                }]
             },
             {
-                type_name: "SelectOption",
-                name: "Challenge only",
-                value: "challenge"
-            }]
-        },
-        {
-            type: "categories",
-            name: "Genre",
-            type_name: "SelectFilter",
-            values: [{
-                type_name: "SelectOption",
-                name: "All",
-                value: ""
+                type_name: "SeparatorFilter",
             },
             {
-                type_name: "SelectOption",
-                name: "Action",
-                value: "action"
+                type_name: "HeaderFilter",
+                name: "NOTE: Ignored when using text search."
             },
             {
-                type_name: "SelectOption",
-                name: "Comedy",
-                value: "comedy"
-            },
-            {
-                type_name: "SelectOption",
-                name: "Drama",
-                value: "drama"
-            },
-            {
-                type_name: "SelectOption",
-                name: "Fantasy",
-                value: "fantasy"
-            },
-            {
-                type_name: "SelectOption",
-                name: "Heartwarming",
-                value: "heartwarming"
-            },
-            {
-                type_name: "SelectOption",
-                name: "Historical",
-                value: "historical"
-            },
-            {
-                type_name: "SelectOption",
-                name: "Horror",
-                value: "horror"
-            },
-            {
-                type_name: "SelectOption",
-                name: "Informative",
-                value: "tiptoon"
-            },
-            {
-                type_name: "SelectOption",
-                name: "Mystery",
-                value: "mystery"
-            },
-            {
-                type_name: "SelectOption",
-                name: "Romance",
-                value: "romance"
-            },
-            {
-                type_name: "SelectOption",
-                name: "Sci-fi",
-                value: "sf"
-            },
-            {
-                type_name: "SelectOption",
-                name: "Slice of life",
-                value: "slice_of_life"
-            },
-            {
-                type_name: "SelectOption",
-                name: "Sports",
-                value: "sports"
-            },
-            {
-                type_name: "SelectOption",
-                name: "Superhero",
-                value: "super_hero"
-            },
-            {
-                type_name: "SelectOption",
-                name: "Supernatural",
-                value: "supernatural"
-            }]
-        }
+                type: "categories",
+                name: "Genre",
+                type_name: "SelectFilter",
+                values: [{
+                    type_name: "SelectOption",
+                    name: "All",
+                    value: ""
+                },
+                {
+                    type_name: "SelectOption",
+                    name: "Action",
+                    value: "action"
+                },
+                {
+                    type_name: "SelectOption",
+                    name: "Comedy",
+                    value: "comedy"
+                },
+                {
+                    type_name: "SelectOption",
+                    name: "Drama",
+                    value: "drama"
+                },
+                {
+                    type_name: "SelectOption",
+                    name: "Fantasy",
+                    value: "fantasy"
+                },
+                {
+                    type_name: "SelectOption",
+                    name: "Heartwarming",
+                    value: "heartwarming"
+                },
+                {
+                    type_name: "SelectOption",
+                    name: "Historical",
+                    value: "historical"
+                },
+                {
+                    type_name: "SelectOption",
+                    name: "Horror",
+                    value: "horror"
+                },
+                {
+                    type_name: "SelectOption",
+                    name: "Informative",
+                    value: "tiptoon"
+                },
+                {
+                    type_name: "SelectOption",
+                    name: "Mystery",
+                    value: "mystery"
+                },
+                {
+                    type_name: "SelectOption",
+                    name: "Romance",
+                    value: "romance"
+                },
+                {
+                    type_name: "SelectOption",
+                    name: "Sci-fi",
+                    value: "sf"
+                },
+                {
+                    type_name: "SelectOption",
+                    name: "Slice of life",
+                    value: "slice_of_life"
+                },
+                {
+                    type_name: "SelectOption",
+                    name: "Sports",
+                    value: "sports"
+                },
+                {
+                    type_name: "SelectOption",
+                    name: "Superhero",
+                    value: "super_hero"
+                },
+                {
+                    type_name: "SelectOption",
+                    name: "Supernatural",
+                    value: "supernatural"
+                }]
+            }
         ];
-    }
-
-    getSourcePreferences() {
-        throw new Error("getSourcePreferences not implemented");
     }
 }
